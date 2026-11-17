@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#3156D3">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Meio Termo — cifras na sua medida</title>
+<style>
+:root{--paper:#F4F6F8;--card:#fff;--ink:#17202E;--mute:#5E6B7D;--line:#D9DFE7;--s:#0E8A7D;--i:#3156D3;--a:#B5179E;--fs:14px}
+@media(prefers-color-scheme:dark){:root{--paper:#10151D;--card:#18202B;--ink:#E8EDF4;--mute:#93A1B5;--line:#2A3544;--s:#3CC9B8;--i:#7C9BFF;--a:#F06CD9}}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+main{max-width:760px;margin:0 auto;padding:16px 16px 80px}
+h1,h2,h3{font-family:"Iowan Old Style",Georgia,serif;margin:0;line-height:1.2}
+h1{font-size:28px}h2{font-size:22px}h3{font-size:18px}
+a{color:var(--i)}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;border:1px solid var(--line);background:var(--card);border-radius:8px;padding:8px 12px;min-height:40px}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--i);outline-offset:2px}
+button.primary{background:var(--i);border-color:var(--i);color:#fff;font-weight:600}
+button.ghost{border-color:transparent;background:none;color:var(--mute)}
+button.danger{color:#C62828}
+button:disabled{opacity:.6;cursor:wait}
+.bar{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:16px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.mute{color:var(--mute);font-size:14px}
+.field{display:block;margin:14px 0}
+.field>span{display:block;font-size:14px;color:var(--mute);margin-bottom:4px}
+input[type=text],input[type=password],select,textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+textarea{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;min-height:200px;white-space:pre;overflow:auto}
+.song{display:block;width:100%;text-align:left;padding:14px;margin-bottom:8px}
+.song b{font-family:Georgia,serif;font-size:18px}
+.empty{padding:32px 16px;text-align:center;border:1px dashed var(--line);border-radius:12px;color:var(--mute)}
+.sec{background:var(--card);border:1px solid var(--line);border-left:6px solid var(--vc);border-radius:10px;margin:14px 0;padding:12px 14px}
+.sec header{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;border-radius:0;padding:6px 10px;min-height:36px;font-size:14px;background:none}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed=true]{background:var(--c);color:#fff;font-weight:600}
+pre{margin:0;overflow-x:auto;font:var(--fs)/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre;tab-size:4}
+pre b{color:var(--vc);font-weight:700}
+.sec textarea{min-height:160px}
+.status{margin-top:12px;padding:10px;border-radius:8px;background:var(--card);border:1px solid var(--line);font-size:14px}
+.status.err{border-color:#C62828;color:#C62828}
+.tabs{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin:8px 0}
+.tabs label{padding:8px 14px;cursor:pointer;background:var(--card)}
+.tabs input{position:absolute;opacity:0}
+.tabs input:checked+span{font-weight:700;text-decoration:underline;text-decoration-color:var(--i);text-underline-offset:4px}
+.tabs label:has(input:focus-visible){outline:2px solid var(--i)}
+@media(max-width:520px){.seg button{padding:6px 8px;font-size:13px}}
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const app = $('#app');
+const L = {simple:'Simples', intermediate:'Intermediária', advanced:'Avançada'};
+const VAR = {simple:'--s', intermediate:'--i', advanced:'--a'};
+const KEYS = ['simple','intermediate','advanced'];
+const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) || d; } catch { return d; } };
+let db = load('meiotermo.songs', {songs:[]});
+let cfg = load('meiotermo.cfg', {key:'', model:'claude-sonnet-4-6', fs:14});
+const saveDb = () => localStorage.setItem('meiotermo.songs', JSON.stringify(db));
+const saveCfg = () => localStorage.setItem('meiotermo.cfg', JSON.stringify(cfg));
+document.documentElement.style.setProperty('--fs', cfg.fs + 'px');
+let editing = null;
+
+/* ---------- cifra: detecta linhas de acordes e destaca ---------- */
+const CHORD = /^[A-G][#b]?(?:maj|min|dim|aug|sus|add|m|M|°|º|\+)?(?:(?:sus|add|maj|b|#|\+|-)?[0-9]+)*(?:\([^)]*\))?(?:\/[A-G][#b]?)?$/;
+const FILL = /^(\||x\d+|-+|\.+|\/)$/;
+function isChordLine(l) {
+  const t = l.trim().split(/\s+/);
+  return l.trim() !== '' && t.every(w => CHORD.test(w) || FILL.test(w)) && t.some(w => CHORD.test(w));
+}
+const esc = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = t => (t || '').split('\n').map(l => isChordLine(l) ? esc(l).replace(/\S+/g, m => `<b>${m}</b>`) : esc(l)).join('\n');
+
+/* ---------- IA ---------- */
+const SYSTEM = `Você é um arranjador de cifras para violão e guitarra. Responda SEMPRE e SOMENTE com um objeto JSON válido (sem markdown, sem texto antes ou depois) neste formato:
+{"title":"","artist":"","key":"tom original","sections":[{"name":"Intro","simple":"","intermediate":"","advanced":""}]}
+Regras:
+- Cada trecho (Intro, Verso, Refrão, Ponte, Solo...) tem 3 versões em formato de cifra: uma linha de acordes ACIMA da linha de letra, alinhada com a sílaba onde o acorde troca, usando espaços (texto monoespaçado). Use \\n para quebras de linha.
+- A letra e a ordem dos trechos são idênticas nas 3 versões. Não reescreva nem invente letra; se não tiver certeza da letra, deixe só os acordes.
+- simple: poucos acordes, formas abertas e fáceis, sem pestana quando possível, sem extensões (7, 9, sus viram a tríade).
+- advanced: harmonia completa e fiel à versão original, com extensões, baixos invertidos, sus, add9 etc.
+- intermediate: meio-termo entre as duas. Mantém a harmonia e a "cara" da música (por exemplo, mantém 7ª quando é essencial), mas tira extensões raras, inversões difíceis e formas muito esticadas; pestanas comuns são aceitáveis.
+- Mantenha o mesmo tom nas 3 versões. Se usar capotraste, escreva na primeira linha do trecho Intro, ex: "Capotraste na 2ª casa".
+- Para guitarra: simple pode usar power chords e tríades; advanced pode usar voicings mais ricos. Para violão: acordes de violão.`;
+
+async function ask(userText, search) {
+  if (!cfg.key) throw new Error('Cadastre sua chave da API da Anthropic em Configurações.');
+  const body = {model: cfg.model, max_tokens: 12000, system: SYSTEM, messages:[{role:'user', content:userText}]};
+  if (search) body.tools = [{type:'web_search_20250305', name:'web_search', max_uses:6}];
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method:'POST',
+    headers:{'content-type':'application/json','x-api-key':cfg.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error?.message || 'Erro ' + res.status);
+  const texts = data.content.filter(b => b.type === 'text').map(b => b.text);
+  for (const t of texts.reverse()) {
+    const a = t.indexOf('{'), z = t.lastIndexOf('}');
+    if (a < 0 || z < a) continue;
+    try { return JSON.parse(t.slice(a, z + 1)); } catch {}
+  }
+  throw new Error('A IA não devolveu um resultado legível. Tente de novo.');
+}
+
+/* ---------- telas ---------- */
+const find = id => db.songs.find(s => s.id === id);
+function nav(h) { location.hash = h; }
+
+function home() {
+  app.innerHTML = `
+  <div class="bar"><h1>Meio Termo</h1>
+    <div class="row"><button class="ghost" data-act="go" data-to="#/cfg">Configurações</button><button class="primary" data-act="go" data-to="#/new">Nova música</button></div></div>
+  ${db.songs.length ? db.songs.map(s => `<button class="song" data-act="go" data-to="#/song/${s.id}"><b>${esc(s.title)}</b><br><span class="mute">${esc(s.artist || '')} ${s.artist ? '·' : ''} ${s.instrument === 'guitarra' ? 'Guitarra' : 'Violão'}, ${s.sections.length} trechos</span></button>`).join('')
+  : `<div class="empty">Nenhuma música salva ainda.<br>Toque em “Nova música” e digite o nome da que você quer tocar.</div>`}`;
+}
+
+function newView() {
+  app.innerHTML = `
+  <div class="bar"><button class="ghost" data-act="go" data-to="#/">Voltar</button></div>
+  <h2>Nova música</h2>
+  <div class="tabs" role="radiogroup" aria-label="Instrumento">
+    <label><input type="radio" name="inst" value="violao" checked><span>Violão</span></label>
+    <label><input type="radio" name="inst" value="guitarra"><span>Guitarra</span></label></div><br>
+  <div class="tabs" role="radiogroup" aria-label="Origem">
+    <label><input type="radio" name="mode" value="busca" checked><span>Buscar na internet</span></label>
+    <label><input type="radio" name="mode" value="cola"><span>Colar cifras</span></label></div>
+  <label class="field"><span>Música e artista</span><input type="text" id="q" placeholder="Ex.: Trem-Bala, Ana Vilela"></label>
+  <div id="paste" hidden>
+    <p class="mute">Copie a cifra do site e cole aqui. O formato com os acordes em cima da letra funciona, desde que você copie o texto da cifra e não um print. Preencha uma ou as duas versões.</p>
+    <label class="field"><span>Versão simplificada</span><textarea id="t-s"></textarea></label>
+    <label class="field"><span>Versão avançada</span><textarea id="t-a"></textarea></label>
+  </div>
+  <button class="primary" id="go" data-act="gen">Gerar versão intermediária</button>
+  <div id="st" class="status" hidden></div>`;
+  document.querySelectorAll('[name=mode]').forEach(r => r.onchange = () => { $('#paste').hidden = r.value !== 'cola' || !r.checked; });
+}
+
+async function gen() {
+  const st = $('#st'), btn = $('#go');
+  const mode = document.querySelector('[name=mode]:checked').value;
+  const inst = document.querySelector('[name=inst]:checked').value;
+  const q = $('#q').value.trim(), ts = $('#t-s').value.trim(), ta = $('#t-a').value.trim();
+  const say = (m, err) => { st.hidden = false; st.className = 'status' + (err ? ' err' : ''); st.textContent = m; };
+  if (!q) return say('Digite o nome da música.', true);
+  if (mode === 'cola' && !ts && !ta) return say('Cole pelo menos uma das versões.', true);
+  btn.disabled = true;
+  say(mode === 'busca' ? 'Buscando as cifras e montando as três versões. Isso leva de 30 a 90 segundos.' : 'Montando as três versões a partir do que você colou.');
+  const inst2 = inst === 'guitarra' ? 'guitarra' : 'violão';
+  const prompt = mode === 'busca'
+    ? `Música: ${q}\nInstrumento: ${inst2}\nUse a busca na web para encontrar a cifra em sites de cifras (Cifra Club e similares): uma versão simplificada e uma versão completa/avançada. Depois gere as três versões (simples, intermediária, avançada), trecho por trecho.`
+    : `Música: ${q}\nInstrumento: ${inst2}\nCIFRA SIMPLIFICADA (pode estar vazia):\n${ts || '(vazia)'}\n\nCIFRA AVANÇADA (pode estar vazia):\n${ta || '(vazia)'}\n\nAlinhe as duas por trechos e gere as três versões. Se uma estiver vazia, derive a partir da outra.`;
+  try {
+    const r = await ask(prompt, mode === 'busca');
+    if (!r.sections?.length) throw new Error('Nenhum trecho foi retornado.');
+    const song = {id: Date.now().toString(36), title: r.title || q, artist: r.artist || '', key: r.key || '', instrument: inst, created: Date.now(),
+      sections: r.sections.map(s => ({name: s.name || 'Trecho', sel: 'intermediate', v: {simple: s.simple || s.intermediate || '', intermediate: s.intermediate || '', advanced: s.advanced || s.intermediate || ''}}))};
+    db.songs.unshift(song); saveDb(); nav('#/song/' + song.id);
+  } catch (e) { say(e.message, true); btn.disabled = false; }
+}
+
+function songView(id) {
+  const s = find(id);
+  if (!s) return nav('#/');
+  app.innerHTML = `
+  <div class="bar"><button class="ghost" data-act="go" data-to="#/">Voltar</button>
+    <div class="row"><button data-act="fs" data-d="-1" aria-label="Diminuir letra">A−</button><button data-act="fs" data-d="1" aria-label="Aumentar letra">A+</button></div></div>
+  <h1>${esc(s.title)}</h1>
+  <p class="mute">${esc(s.artist)}${s.key ? ' · tom ' + esc(s.key) : ''} · ${s.instrument === 'guitarra' ? 'Guitarra' : 'Violão'}</p>
+  <div class="row"><span class="mute">Todos os trechos:</span>${KEYS.map(k => `<button data-act="all" data-k="${k}" style="border-color:var(${VAR[k]})">${L[k]}</button>`).join('')}</div>
+  ${s.sections.map((x, i) => `
+  <article class="sec" style="--vc:var(${VAR[x.sel]})">
+    <header><h3>${esc(x.name)}</h3>
+      <div class="seg" role="group" aria-label="Versão de ${esc(x.name)}">${KEYS.map(k => `<button style="--c:var(${VAR[k]})" data-act="sel" data-i="${i}" data-k="${k}" aria-pressed="${x.sel === k}">${L[k]}</button>`).join('')}</div></header>
+    ${editing === i ? `<textarea data-i="${i}" spellcheck="false">${esc(x.v[x.sel])}</textarea>` : `<pre>${fmt(x.v[x.sel])}</pre>`}
+    <div class="row" style="margin-top:6px"><button class="ghost" data-act="edit" data-i="${i}">${editing === i ? 'Pronto' : 'Editar este trecho'}</button></div>
+  </article>`).join('')}
+  <p><button class="ghost danger" data-act="del" data-id="${s.id}">Excluir música</button></p>`;
+}
+
+function cfgView() {
+  app.innerHTML = `
+  <div class="bar"><button class="ghost" data-act="go" data-to="#/">Voltar</button></div>
+  <h2>Configurações</h2>
+  <label class="field"><span>Chave da API da Anthropic</span><input type="password" id="k" value="${esc(cfg.key)}" autocomplete="off" placeholder="sk-ant-..."></label>
+  <p class="mute">A chave fica só neste aparelho e é enviada apenas para api.anthropic.com. Crie uma em console.anthropic.com.</p>
+  <label class="field"><span>Modelo</span><input type="text" id="m" value="${esc(cfg.model)}"></label>
+  <button class="primary" data-act="savecfg">Salvar</button>
+  <h3 style="margin-top:32px">Backup</h3>
+  <p class="mute">Suas músicas ficam salvas no navegador deste aparelho. Exporte um arquivo para guardar ou levar para outro aparelho.</p>
+  <div class="row"><button data-act="export">Exportar músicas</button><button data-act="import">Importar músicas</button></div>
+  <input type="file" id="f" accept="application/json" hidden>`;
+  $('#f').onchange = async e => {
+    try {
+      const d = JSON.parse(await e.target.files[0].text());
+      const ids = new Set(db.songs.map(x => x.id));
+      d.songs.forEach(x => { if (!ids.has(x.id)) db.songs.push(x); });
+      saveDb(); alert('Músicas importadas.'); nav('#/');
+    } catch { alert('Esse arquivo não parece um backup válido.'); }
+  };
+}
+
+/* ---------- eventos ---------- */
+document.addEventListener('input', e => {
+  if (e.target.matches('.sec textarea')) {
+    const s = find(location.hash.split('/')[2]), x = s.sections[+e.target.dataset.i];
+    x.v[x.sel] = e.target.value; saveDb();
+  }
+});
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  const d = b.dataset, id = location.hash.split('/')[2], s = find(id);
+  switch (d.act) {
+    case 'go': editing = null; nav(d.to); break;
+    case 'gen': gen(); break;
+    case 'sel': s.sections[+d.i].sel = d.k; saveDb(); songView(id); break;
+    case 'all': s.sections.forEach(x => x.sel = d.k); saveDb(); songView(id); break;
+    case 'edit': editing = editing === +d.i ? null : +d.i; songView(id); break;
+    case 'fs': cfg.fs = Math.min(26, Math.max(10, cfg.fs + 2 * +d.d)); saveCfg(); document.documentElement.style.setProperty('--fs', cfg.fs + 'px'); break;
+    case 'del': if (confirm('Excluir esta música?')) { db.songs = db.songs.filter(x => x.id !== d.id); saveDb(); nav('#/'); } break;
+    case 'savecfg': cfg.key = $('#k').value.trim(); cfg.model = $('#m').value.trim() || 'claude-sonnet-4-6'; saveCfg(); nav('#/'); break;
+    case 'export': { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(db)], {type:'application/json'})); a.download = 'meio-termo-backup.json'; a.click(); break; }
+    case 'import': $('#f').click(); break;
+  }
+});
+function route() {
+  const [, p, id] = location.hash.split('/');
+  editing = null;
+  if (p === 'new') newView(); else if (p === 'song') songView(id); else if (p === 'cfg') cfgView(); else home();
+  window.scrollTo(0, 0);
+}
+addEventListener('hashchange', route);
+route();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
