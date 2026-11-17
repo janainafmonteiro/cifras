@@ -73,7 +73,7 @@ document.documentElement.style.setProperty('--fs', cfg.fs + 'px');
 let editing = null;
 
 /* ---------- cifra: detecta linhas de acordes e destaca ---------- */
-const CHORD = /^[A-G][#b]?(?:maj|min|dim|aug|sus|add|m|M|°|º|\+)?(?:(?:sus|add|maj|b|#|\+|-)?[0-9]+)*(?:\([^)]*\))?(?:\/[A-G][#b]?)?$/;
+const CHORD = /^[A-G][#b]?(?:maj|min|dim|aug|sus|add|m|M|°|º|\+)?(?:(?:sus|add|maj|b|#|\+|-)?[0-9]+M?\+?)*(?:\([^)]*\))?(?:\/[A-G][#b]?)?$/;
 const FILL = /^(\||x\d+|-+|\.+|\/)$/;
 function isChordLine(l) {
   const t = l.trim().split(/\s+/);
@@ -81,6 +81,59 @@ function isChordLine(l) {
 }
 const esc = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmt = t => (t || '').split('\n').map(l => isChordLine(l) ? esc(l).replace(/\S+/g, m => `<b>${m}</b>`) : esc(l)).join('\n');
+
+/* ---------- sem IA: simplifica por regras, mantendo o alinhamento ---------- */
+function simp(tok, lvl) {
+  const m = tok.match(/^([A-G][#b]?)(.*?)(?:\/[A-G][#b]?)?$/); if (!m) return tok;
+  const root = m[1]; let rest = m[2];
+  const minor = /^(m(?!aj)|min|dim|°|º)/.test(rest);
+  if (lvl === 'simple') return root + (minor ? 'm' : '');
+  if (/^(m7\(?b5\)?|ø)/.test(rest)) return root + 'm7b5';
+  if (/^(dim|°|º)/.test(rest)) return root + 'dim';
+  const sus = rest.match(/^sus[24]?/); if (sus) return root + sus[0];
+  const base = /^(m(?!aj)|min)/.test(rest) ? 'm' : '';
+  const tail = rest.replace(/^(m(?!aj)|min)/, '').replace(/\(.*?\)/g, '').replace(/^7M/, 'maj7');
+  if (/^(maj|M)(7|9|11|13)/.test(tail)) return root + base + 'maj7';
+  if (/^(7|9|11|13)/.test(tail)) return root + base + '7';
+  return root + base;
+}
+function derive(text, lvl) {
+  return text.split('\n').map(l => !isChordLine(l) ? l : l.replace(/(\S+)(\s*)/g, (m, t, sp) => {
+    if (!CHORD.test(t)) return m;
+    const n = simp(t, lvl);
+    return n + ' '.repeat(Math.max(m.length - n.length, sp ? 1 : 0));
+  })).join('\n');
+}
+function parseSections(text) {
+  const lines = text.replace(/\r/g, '').split('\n'), out = [];
+  let cur = null;
+  const push = () => { if (cur) { cur.t = cur.t.join('\n').replace(/^\n+|\s+$/g, ''); if (cur.t) out.push(cur); } };
+  if (lines.some(l => /^\s*\[[^\]]+\]/.test(l))) {
+    for (const l of lines) {
+      const m = l.match(/^\s*\[([^\]]+)\](.*)$/);
+      if (m) { push(); cur = {name: m[1].trim(), t: m[2].trim() ? [m[2].trim()] : []}; }
+      else { if (!cur) cur = {name: 'Início', t: []}; cur.t.push(l); }
+    }
+    push();
+  } else {
+    text.replace(/\r/g, '').split(/\n\s*\n/).forEach((t, i) => { cur = {name: 'Trecho ' + (i + 1), t: [t]}; push(); });
+  }
+  return out;
+}
+function genOffline() {
+  const st = $('#st'); st.hidden = false;
+  const q = $('#q').value.trim(), ts = $('#t-s').value.trim(), ta = $('#t-a').value.trim();
+  const fail = m => { st.className = 'status err'; st.textContent = m; };
+  if (!q) return fail('Digite o nome da música.');
+  if (!ts && !ta) return fail('Cole pelo menos uma das versões.');
+  const A = parseSections(ta || ts), S = ts && ta ? parseSections(ts) : null;
+  if (!A.length) return fail('Não encontrei trechos no texto colado.');
+  const useS = S && S.length === A.length;
+  if (S && !useS) alert('Não consegui casar os trechos da simplificada com os da avançada, então a simplificada foi gerada a partir da avançada.');
+  const song = {id: Date.now().toString(36), title: q, artist: '', key: '', instrument: document.querySelector('[name=inst]:checked').value, created: Date.now(),
+    sections: A.map((x, i) => ({name: x.name, sel: 'intermediate', v: {simple: useS ? S[i].t : derive(x.t, 'simple'), intermediate: derive(x.t, 'inter'), advanced: x.t}}))};
+  db.songs.unshift(song); saveDb(); nav('#/song/' + song.id);
+}
 
 /* ---------- IA ---------- */
 const SYSTEM = `Você é um arranjador de cifras para violão e guitarra. Responda SEMPRE e SOMENTE com um objeto JSON válido (sem markdown, sem texto antes ou depois) neste formato:
@@ -102,15 +155,26 @@ function pickJson(texts) {
   }
   throw new Error('A IA não devolveu um resultado legível. Tente de novo.');
 }
-async function ask(userText, search) {
+const wait = ms => new Promise(r => setTimeout(r, ms));
+async function ask(userText, search, note) {
   if (cfg.provider === 'gemini') {
     if (!cfg.gkey) throw new Error('Cadastre sua chave do Gemini em Configurações.');
     const body = {systemInstruction:{parts:[{text:SYSTEM}]}, contents:[{role:'user', parts:[{text:userText}]}], generationConfig:{maxOutputTokens:16000}};
     if (search) body.tools = [{google_search:{}}]; else body.generationConfig.responseMimeType = 'application/json';
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(cfg.gmodel)}:generateContent`, {
-      method:'POST', headers:{'content-type':'application/json','x-goog-api-key':cfg.gkey}, body: JSON.stringify(body)});
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error?.message || 'Erro ' + res.status);
+    const models = [cfg.gmodel, 'gemini-flash-lite-latest'].filter((m, i, a) => a.indexOf(m) === i);
+    let res, data;
+    for (const m of models) {
+      for (let t = 0; t < 3; t++) {
+        res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(m)}:generateContent`, {
+          method:'POST', headers:{'content-type':'application/json','x-goog-api-key':cfg.gkey}, body: JSON.stringify(body)});
+        data = await res.json().catch(() => ({}));
+        if (res.ok || ![429, 500, 503, 504].includes(res.status)) break;
+        note && note(`O Gemini está ocupado. Tentando de novo (${models.indexOf(m) * 3 + t + 1}/${models.length * 3})…`);
+        await wait(2000 * 2 ** t);
+      }
+      if (res.ok) break;
+    }
+    if (!res.ok) throw new Error(([429, 500, 503, 504].includes(res.status) ? 'O Gemini está sobrecarregado ou sem cota agora. Tente de novo em alguns minutos ou use “Gerar sem IA”. ' : '') + (data.error?.message || 'Erro ' + res.status));
     const parts = data.candidates?.[0]?.content?.parts || [];
     return pickJson(parts.filter(p => p.text && !p.thought).map(p => p.text));
   }
@@ -155,9 +219,11 @@ function newView() {
     <label class="field"><span>Versão simplificada</span><textarea id="t-s"></textarea></label>
     <label class="field"><span>Versão avançada</span><textarea id="t-a"></textarea></label>
   </div>
-  <button class="primary" id="go" data-act="gen">Gerar versão intermediária</button>
+  <div class="row"><button class="primary" id="go" data-act="gen">Gerar versão intermediária</button>
+  <button id="off" data-act="off" hidden>Gerar sem IA (grátis, offline)</button></div>
+  <p class="mute" id="offnote" hidden>“Sem IA” usa regras simples: tira extensões e inversões dos acordes da avançada. Não precisa de chave nem de internet.</p>
   <div id="st" class="status" hidden></div>`;
-  document.querySelectorAll('[name=mode]').forEach(r => r.onchange = () => { $('#paste').hidden = r.value !== 'cola' || !r.checked; });
+  document.querySelectorAll('[name=mode]').forEach(r => r.onchange = () => { const on = document.querySelector('[name=mode]:checked').value === 'cola'; $('#paste').hidden = !on; $('#off').hidden = !on; $('#offnote').hidden = !on; });
 }
 
 async function gen() {
@@ -177,7 +243,7 @@ async function gen() {
     ? `Música: ${q}\nInstrumento: ${inst2}\nUse a busca na web para encontrar a cifra em sites de cifras (Cifra Club e similares): uma versão simplificada e uma versão completa/avançada. Depois gere as três versões (simples, intermediária, avançada), trecho por trecho.`
     : `Música: ${q}\nInstrumento: ${inst2}\nCIFRA SIMPLIFICADA (pode estar vazia):\n${ts || '(vazia)'}\n\nCIFRA AVANÇADA (pode estar vazia):\n${ta || '(vazia)'}\n\nAlinhe as duas por trechos e gere as três versões. Se uma estiver vazia, derive a partir da outra.`;
   try {
-    const r = await ask(prompt, mode === 'busca' && canSearch());
+    const r = await ask(prompt, mode === 'busca' && canSearch(), say);
     if (!r.sections?.length) throw new Error('Nenhum trecho foi retornado.');
     const song = {id: Date.now().toString(36), title: r.title || q, artist: r.artist || '', key: r.key || '', instrument: inst, created: Date.now(),
       sections: r.sections.map(s => ({name: s.name || 'Trecho', sel: 'intermediate', v: {simple: s.simple || s.intermediate || '', intermediate: s.intermediate || '', advanced: s.advanced || s.intermediate || ''}}))};
@@ -251,6 +317,7 @@ document.addEventListener('click', e => {
   switch (d.act) {
     case 'go': editing = null; nav(d.to); break;
     case 'gen': gen(); break;
+    case 'off': genOffline(); break;
     case 'sel': s.sections[+d.i].sel = d.k; saveDb(); songView(id); break;
     case 'all': s.sections.forEach(x => x.sel = d.k); saveDb(); songView(id); break;
     case 'edit': editing = editing === +d.i ? null : +d.i; songView(id); break;

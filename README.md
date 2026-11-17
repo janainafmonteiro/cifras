@@ -16,3 +16,6 @@ Com o site no ar, use https://www.pwabuilder.com, cole a URL e baixe o pacote An
 
 ## Dica sobre colar cifras
 Copie o texto da cifra (acordes em cima da letra). Funciona bem porque o app mostra em fonte monoespaçada e preserva os espaços.
+
+## Sem gastar e sem IA
+Em "Colar cifras" há o botão "Gerar sem IA": o app deriva as versões simples e intermediária da cifra avançada por regras (tira extensões e baixos invertidos, mantendo o alinhamento). Funciona offline.
