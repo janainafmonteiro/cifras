@@ -47,7 +47,8 @@ pre b{color:var(--vc);font-weight:700}
 .status{margin-top:12px;padding:10px;border-radius:8px;background:var(--card);border:1px solid var(--line);font-size:14px}
 .status.err{border-color:#C62828;color:#C62828}
 .tabs{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin:8px 0}
-.tabs label{padding:8px 14px;cursor:pointer;background:var(--card)}
+.tabs{flex-wrap:wrap}
+.tabs label{padding:8px 12px;cursor:pointer;background:var(--card)}
 .tabs input{position:absolute;opacity:0}
 .tabs input:checked+span{font-weight:700;text-decoration:underline;text-decoration-color:var(--i);text-underline-offset:4px}
 .tabs label:has(input:focus-visible){outline:2px solid var(--i)}
@@ -65,7 +66,7 @@ const VAR = {simple:'--s', intermediate:'--i', advanced:'--a'};
 const KEYS = ['simple','intermediate','advanced'];
 const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) || d; } catch { return d; } };
 let db = load('meiotermo.songs', {songs:[]});
-let cfg = {provider:'gemini', key:'', model:'claude-sonnet-4-6', gkey:'', gmodel:'gemini-flash-latest', gsearch:false, fs:14, ...load('meiotermo.cfg', {})};
+let cfg = {provider:'gemini', key:'', model:'claude-sonnet-4-6', gkey:'', gmodel:'gemini-flash-latest', gsearch:false, sheet:'', fs:14, ...load('meiotermo.cfg', {})};
 const canSearch = () => cfg.provider === 'anthropic' || cfg.gsearch;
 const saveDb = () => localStorage.setItem('meiotermo.songs', JSON.stringify(db));
 const saveCfg = () => localStorage.setItem('meiotermo.cfg', JSON.stringify(cfg));
@@ -135,6 +136,100 @@ function genOffline() {
   db.songs.unshift(song); saveDb(); nav('#/song/' + song.id);
 }
 
+/* ---------- importar do chat / planilha ---------- */
+const slug = s => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+const noAcc = s => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+function parseChat(text) {
+  const L = text.replace(/\r/g, '').split('\n').filter(l => !/^\s*```/.test(l));
+  const meta = {}, secs = []; let sec = null, ver = null, m;
+  for (const l of L) {
+    if (!sec && (m = l.match(/^\s*\**\s*(T[IÍ]TULO|ARTISTA|TOM|INSTRUMENTO)\s*:\s*\**\s*(.*)$/i))) { meta[noAcc(m[1])] = m[2].replace(/\*+$/, '').trim(); continue; }
+    if ((m = l.match(/^\s*==\s*(.+?)\s*==\s*$/))) { sec = {name: m[1], simple: [], intermediate: [], advanced: []}; secs.push(sec); ver = null; continue; }
+    if (sec && (m = l.match(/^\s*---\s*(simples|intermedi[aá]ria|avan[cç]ada)\s*---\s*$/i))) { ver = /simples/i.test(m[1]) ? 'simple' : /intermedi/i.test(m[1]) ? 'intermediate' : 'advanced'; continue; }
+    if (sec && ver) sec[ver].push(l);
+  }
+  secs.forEach(s => KEYS.forEach(k => s[k] = s[k].join('\n').replace(/^\n+|\s+$/g, '')));
+  return {meta, secs: secs.filter(s => s.simple || s.intermediate || s.advanced)};
+}
+function parseCsv(t) {
+  const rows = []; let r = [], c = '', q = false;
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (q) { if (ch === '"') { if (t[i + 1] === '"') { c += '"'; i++; } else q = false; } else c += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === ',') { r.push(c); c = ''; }
+    else if (ch === '\n') { r.push(c); rows.push(r); r = []; c = ''; }
+    else if (ch !== '\r') c += ch;
+  }
+  if (c || r.length) { r.push(c); rows.push(r); }
+  return rows;
+}
+function upsert(meta, secs) {
+  const id = 'p-' + slug(meta.title + ' ' + (meta.artist || ''));
+  let s = find(id);
+  if (!s) { s = {id, created: Date.now(), sections: []}; db.songs.unshift(s); }
+  Object.assign(s, {title: meta.title, artist: meta.artist || '', key: meta.key || '', instrument: /guitarra/i.test(meta.instrument || '') ? 'guitarra' : 'violao'});
+  secs.forEach((n, i) => {
+    let x = s.sections[i];
+    if (!x) x = s.sections[i] = {name: n.name, sel: 'intermediate', v: {}};
+    x.name = n.name; x.edited = x.edited || {}; x.src = {};
+    KEYS.forEach(k => { const t = n[k] || n.intermediate || n.advanced || n.simple || ''; x.src[k] = t; if (!x.edited[k]) x.v[k] = t; });
+  });
+  s.sections.length = secs.length;
+  return s;
+}
+function copyText(t) {
+  (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => alert('Copiado.')).catch(() => prompt('Copie o texto abaixo:', t));
+}
+const FORMATO = `TITULO: nome da música
+ARTISTA: nome do artista
+TOM: tom original
+INSTRUMENTO: violao
+== Intro ==
+--- simples ---
+(acordes em cima da letra)
+--- intermediaria ---
+(acordes em cima da letra)
+--- avancada ---
+(acordes em cima da letra)
+== Verso 1 ==
+--- simples ---
+...
+(repita para todos os trechos: Verso, Refrão, Ponte, Solo...)`;
+const REGRAS = `simples = acordes básicos e fáceis, sem pestana quando possível, sem extensões; avancada = harmonia completa e fiel à original (7ª, 9ª, sus, baixos invertidos); intermediaria = meio-termo (mantém a harmonia e a 7ª quando essencial, mas tira extensões raras e formas muito difíceis). A letra e a ordem dos trechos são iguais nas 3 versões, com os acordes alinhados em cima da sílaba, usando espaços.`;
+function promptChat() {
+  const q = $('#q')?.value.trim() || '[escreva aqui a música e o artista]';
+  const inst = document.querySelector('[name=inst]:checked')?.value === 'guitarra' ? 'guitarra' : 'violão';
+  return `Quero a cifra da música "${q}" para ${inst}. Pesquise a cifra simplificada e a avançada na internet (por exemplo no Cifra Club) e gere 3 versões de cada trecho: ${REGRAS}\n\nResponda SOMENTE com UM bloco de código neste formato exato:\n\n${FORMATO}`;
+}
+function promptSheet() {
+  return `Crie uma planilha do Google Sheets chamada "Minhas cifras" com uma linha por trecho da música e estas colunas, nesta ordem: musica, artista, tom, instrumento, trecho, simples, intermediaria, avancada. Em "simples", "intermediaria" e "avancada" vai a cifra do trecho: linha de acordes em cima da linha da letra, alinhados com espaços, com quebras de linha dentro da célula. ${REGRAS}\nA primeira música é: [escreva aqui a música e o artista]. Pesquise as cifras na internet. Depois, quando eu pedir outra música, ACRESCENTE as linhas na mesma planilha, sem apagar as anteriores.`;
+}
+async function syncSheet(silent) {
+  if (!cfg.sheet) return;
+  const msg = m => { const e = $('#sync'); if (e) { e.hidden = false; e.textContent = m; } };
+  try {
+    const res = await fetch(cfg.sheet + (cfg.sheet.includes('?') ? '&' : '?') + '_=' + Date.now());
+    if (!res.ok) throw new Error('A planilha respondeu com erro ' + res.status + '.');
+    const txt = await res.text();
+    if (/^\s*</.test(txt)) throw new Error('Esse link não é um CSV publicado. Use Arquivo > Compartilhar > Publicar na Web > CSV.');
+    const rows = parseCsv(txt), hd = rows.shift().map(noAcc), col = n => hd.indexOf(n);
+    const need = ['musica', 'trecho', 'simples', 'intermediaria', 'avancada'].filter(n => col(n) < 0);
+    if (need.length) throw new Error('Faltam colunas na planilha: ' + need.join(', ') + '.');
+    const g = (r, n) => col(n) < 0 ? '' : (r[col(n)] || '').replace(/\s+$/, '');
+    const songs = new Map();
+    rows.forEach(r => {
+      const t = g(r, 'musica').trim(); if (!t) return;
+      const k = t + '|' + g(r, 'artista').trim();
+      if (!songs.has(k)) songs.set(k, {meta: {title: t, artist: g(r, 'artista').trim(), key: g(r, 'tom').trim(), instrument: g(r, 'instrumento')}, secs: []});
+      songs.get(k).secs.push({name: g(r, 'trecho').trim() || 'Trecho', simple: g(r, 'simples'), intermediate: g(r, 'intermediaria'), advanced: g(r, 'avancada')});
+    });
+    songs.forEach(x => upsert(x.meta, x.secs)); saveDb();
+    if (!location.hash || location.hash === '#/') home();
+    msg('Planilha sincronizada: ' + songs.size + ' músicas.');
+  } catch (e) { if (!silent) msg('Não consegui sincronizar. ' + (e.message === 'Failed to fetch' ? 'Verifique a internet e se o link está publicado como CSV.' : e.message)); }
+}
+
 /* ---------- IA ---------- */
 const SYSTEM = `Você é um arranjador de cifras para violão e guitarra. Responda SEMPRE e SOMENTE com um objeto JSON válido (sem markdown, sem texto antes ou depois) neste formato:
 {"title":"","artist":"","key":"tom original","sections":[{"name":"Intro","simple":"","intermediate":"","advanced":""}]}
@@ -198,7 +293,8 @@ function nav(h) { location.hash = h; }
 function home() {
   app.innerHTML = `
   <div class="bar"><h1>Meio Termo</h1>
-    <div class="row"><button class="ghost" data-act="go" data-to="#/cfg">Configurações</button><button class="primary" data-act="go" data-to="#/new">Nova música</button></div></div>
+    <div class="row">${cfg.sheet ? '<button data-act="sync">Sincronizar</button>' : ''}<button class="ghost" data-act="go" data-to="#/cfg">Configurações</button><button class="primary" data-act="go" data-to="#/new">Nova música</button></div></div>
+  <div id="sync" class="status" role="status" hidden></div>
   ${db.songs.length ? db.songs.map(s => `<button class="song" data-act="go" data-to="#/song/${s.id}"><b>${esc(s.title)}</b><br><span class="mute">${esc(s.artist || '')} ${s.artist ? '·' : ''} ${s.instrument === 'guitarra' ? 'Guitarra' : 'Violão'}, ${s.sections.length} trechos</span></button>`).join('')
   : `<div class="empty">Nenhuma música salva ainda.<br>Toque em “Nova música” e digite o nome da que você quer tocar.</div>`}`;
 }
@@ -211,19 +307,41 @@ function newView() {
     <label><input type="radio" name="inst" value="violao" checked><span>Violão</span></label>
     <label><input type="radio" name="inst" value="guitarra"><span>Guitarra</span></label></div><br>
   <div class="tabs" role="radiogroup" aria-label="Origem">
-    <label><input type="radio" name="mode" value="busca" checked><span>Buscar na internet</span></label>
-    <label><input type="radio" name="mode" value="cola"><span>Colar cifras</span></label></div>
+    <label><input type="radio" name="mode" value="chat" checked><span>Do chat com a IA</span></label>
+    <label><input type="radio" name="mode" value="cola"><span>Colar cifras</span></label>
+    <label><input type="radio" name="mode" value="busca"><span>Com chave de API</span></label></div>
   <label class="field"><span>Música e artista</span><input type="text" id="q" placeholder="Ex.: Trem-Bala, Ana Vilela"></label>
+  <div id="chat">
+    <p class="mute">Passo 1: copie o pedido e cole no chat do Gemini (ou de qualquer IA). Passo 2: copie a resposta e cole abaixo.</p>
+    <button data-act="copyprompt">Copiar pedido para a IA</button>
+    <label class="field"><span>Resposta da IA</span><textarea id="t-c"></textarea></label>
+    <button class="primary" data-act="chatimp">Importar</button>
+  </div>
   <div id="paste" hidden>
     <p class="mute">Copie a cifra do site e cole aqui. O formato com os acordes em cima da letra funciona, desde que você copie o texto da cifra e não um print. Preencha uma ou as duas versões.</p>
     <label class="field"><span>Versão simplificada</span><textarea id="t-s"></textarea></label>
     <label class="field"><span>Versão avançada</span><textarea id="t-a"></textarea></label>
   </div>
-  <div class="row"><button class="primary" id="go" data-act="gen">Gerar versão intermediária</button>
+  <div class="row" id="btns" hidden><button class="primary" id="go" data-act="gen">Gerar com a chave de API</button>
   <button id="off" data-act="off" hidden>Gerar sem IA (grátis, offline)</button></div>
   <p class="mute" id="offnote" hidden>“Sem IA” usa regras simples: tira extensões e inversões dos acordes da avançada. Não precisa de chave nem de internet.</p>
   <div id="st" class="status" hidden></div>`;
-  document.querySelectorAll('[name=mode]').forEach(r => r.onchange = () => { const on = document.querySelector('[name=mode]:checked').value === 'cola'; $('#paste').hidden = !on; $('#off').hidden = !on; $('#offnote').hidden = !on; });
+  const setMode = () => {
+    const m = document.querySelector('[name=mode]:checked').value;
+    $('#chat').hidden = m !== 'chat'; $('#paste').hidden = m !== 'cola'; $('#btns').hidden = m === 'chat';
+    $('#off').hidden = m !== 'cola'; $('#offnote').hidden = m !== 'cola';
+  };
+  document.querySelectorAll('[name=mode]').forEach(r => r.onchange = setMode);
+}
+
+function chatImport() {
+  const st = $('#st'); st.hidden = false; st.className = 'status err';
+  const {meta, secs} = parseChat($('#t-c').value);
+  if (!secs.length) { st.textContent = 'Não encontrei trechos. A resposta precisa ter linhas como “== Intro ==” e “--- simples ---”. Use o botão “Copiar pedido para a IA”.'; return; }
+  const title = meta.titulo || $('#q').value.trim();
+  if (!title) { st.textContent = 'Faltou o título. Digite a música e artista no campo acima.'; return; }
+  const s = upsert({title, artist: meta.artista, key: meta.tom, instrument: meta.instrumento || document.querySelector('[name=inst]:checked').value}, secs);
+  saveDb(); nav('#/song/' + s.id);
 }
 
 async function gen() {
@@ -265,7 +383,7 @@ function songView(id) {
     <header><h3>${esc(x.name)}</h3>
       <div class="seg" role="group" aria-label="Versão de ${esc(x.name)}">${KEYS.map(k => `<button style="--c:var(${VAR[k]})" data-act="sel" data-i="${i}" data-k="${k}" aria-pressed="${x.sel === k}">${L[k]}</button>`).join('')}</div></header>
     ${editing === i ? `<textarea data-i="${i}" spellcheck="false">${esc(x.v[x.sel])}</textarea>` : `<pre>${fmt(x.v[x.sel])}</pre>`}
-    <div class="row" style="margin-top:6px"><button class="ghost" data-act="edit" data-i="${i}">${editing === i ? 'Pronto' : 'Editar este trecho'}</button></div>
+    <div class="row" style="margin-top:6px"><button class="ghost" data-act="edit" data-i="${i}">${editing === i ? 'Pronto' : 'Editar este trecho'}</button>${x.edited?.[x.sel] && x.src ? `<button class="ghost" data-act="reset" data-i="${i}">Voltar ao original</button>` : ''}</div>
   </article>`).join('')}
   <p><button class="ghost danger" data-act="del" data-id="${s.id}">Excluir música</button></p>`;
 }
@@ -287,6 +405,10 @@ function cfgView() {
     <p class="mute">API paga, separada da assinatura do Claude. Crie em console.anthropic.com.</p>
     <label class="field"><span>Modelo</span><input type="text" id="m" value="${esc(cfg.model)}"></label>
   </div>
+  <h3 style="margin-top:32px">Planilha do Google (opcional)</h3>
+  <p class="mute">Peça ao Gemini para criar a planilha, publique-a como CSV e cole o link aqui. Todo trecho novo que o Gemini acrescentar aparece no app ao abrir ou tocar em Sincronizar (o Google pode levar alguns minutos para atualizar o link publicado). Passo a passo no README.</p>
+  <button data-act="copysheet">Copiar pedido para criar a planilha</button>
+  <label class="field"><span>Link CSV publicado</span><input type="text" id="sh" value="${esc(cfg.sheet)}" placeholder="https://docs.google.com/spreadsheets/d/e/.../pub?output=csv"></label>
   <p class="mute">As chaves ficam só neste aparelho e são enviadas apenas ao provedor escolhido.</p>
   <button class="primary" data-act="savecfg">Salvar</button>
   <h3 style="margin-top:32px">Backup</h3>
@@ -308,7 +430,7 @@ function cfgView() {
 document.addEventListener('input', e => {
   if (e.target.matches('.sec textarea')) {
     const s = find(location.hash.split('/')[2]), x = s.sections[+e.target.dataset.i];
-    x.v[x.sel] = e.target.value; saveDb();
+    x.v[x.sel] = e.target.value; (x.edited = x.edited || {})[x.sel] = true; saveDb();
   }
 });
 document.addEventListener('click', e => {
@@ -318,12 +440,17 @@ document.addEventListener('click', e => {
     case 'go': editing = null; nav(d.to); break;
     case 'gen': gen(); break;
     case 'off': genOffline(); break;
+    case 'chatimp': chatImport(); break;
+    case 'copyprompt': copyText(promptChat()); break;
+    case 'copysheet': copyText(promptSheet()); break;
+    case 'sync': syncSheet(false); break;
+    case 'reset': { const x = s.sections[+d.i]; x.v[x.sel] = x.src[x.sel]; x.edited[x.sel] = false; saveDb(); songView(id); break; }
     case 'sel': s.sections[+d.i].sel = d.k; saveDb(); songView(id); break;
     case 'all': s.sections.forEach(x => x.sel = d.k); saveDb(); songView(id); break;
     case 'edit': editing = editing === +d.i ? null : +d.i; songView(id); break;
     case 'fs': cfg.fs = Math.min(26, Math.max(10, cfg.fs + 2 * +d.d)); saveCfg(); document.documentElement.style.setProperty('--fs', cfg.fs + 'px'); break;
     case 'del': if (confirm('Excluir esta música?')) { db.songs = db.songs.filter(x => x.id !== d.id); saveDb(); nav('#/'); } break;
-    case 'savecfg': cfg.provider = $('#p').value; cfg.key = $('#k').value.trim(); cfg.model = $('#m').value.trim() || 'claude-sonnet-4-6'; cfg.gkey = $('#gk').value.trim(); cfg.gmodel = $('#gm').value.trim() || 'gemini-flash-latest'; cfg.gsearch = $('#gs').checked; saveCfg(); nav('#/'); break;
+    case 'savecfg': cfg.provider = $('#p').value; cfg.key = $('#k').value.trim(); cfg.model = $('#m').value.trim() || 'claude-sonnet-4-6'; cfg.gkey = $('#gk').value.trim(); cfg.gmodel = $('#gm').value.trim() || 'gemini-flash-latest'; cfg.gsearch = $('#gs').checked; cfg.sheet = $('#sh').value.trim(); saveCfg(); nav('#/'); syncSheet(false); break;
     case 'export': { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(db)], {type:'application/json'})); a.download = 'meio-termo-backup.json'; a.click(); break; }
     case 'import': $('#f').click(); break;
   }
@@ -336,6 +463,7 @@ function route() {
 }
 addEventListener('hashchange', route);
 route();
+syncSheet(true);
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 </body>
