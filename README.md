@@ -1,6 +1,6 @@
 # Meio Termo — cifras na sua medida
 
-PWA para violão/guitarra. Você digita a música, a IA busca a cifra simplificada e a avançada na internet e monta uma versão intermediária. Cada trecho tem botões Simples / Intermediária / Avançada, e você pode editar o texto de qualquer trecho. Tudo fica salvo no aparelho.
+PWA para violão/guitarra. Você digita a música, a IA busca a cifra simplificada e a avançada na internet e monta uma versão intermediária. Cada trecho tem botões Simples / Intermediária / Avançada, e você pode editar o texto de qualquer trecho. Tudo fica salvo no aparelho
 
 ## Publicar no GitHub Pages
 1. Crie um repositório e envie estes arquivos na raiz.
