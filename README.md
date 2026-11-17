@@ -1,6 +1,6 @@
 # Meio Termo — cifras na sua medida
 
-PWA para violão/guitarra. Você digita a música, a IA busca a cifra simplificada e a avançada na internet e monta uma versão intermediária. Cada trecho tem botões Simples / Intermediária / Avançada, e você pode editar o texto de qualquer trecho. Tudo fica salvo no aparelho
+PWA para violão/guitarra. Você digita a música, a IA (Gemini grátis ou Claude) busca a cifra simplificada e a avançada na internet e monta uma versão intermediária. Cada trecho tem botões Simples / Intermediária / Avançada, e você pode editar o texto de qualquer trecho. Tudo fica salvo no aparelho.
 
 ## Publicar no GitHub Pages
 1. Crie um repositório e envie estes arquivos na raiz.
@@ -8,7 +8,7 @@ PWA para violão/guitarra. Você digita a música, a IA busca a cifra simplifica
 3. Abra `https://SEU-USUARIO.github.io/NOME-DO-REPO/` no celular e use "Instalar app" / "Adicionar à tela inicial".
 
 ## Usar
-1. Em Configurações, cole sua chave da API da Anthropic (console.anthropic.com). Ela fica só no seu aparelho.
+1. Em Configurações, escolha o provedor e cole a chave: Gemini (grátis, aistudio.google.com/apikey) ou Anthropic (paga). A chave fica só no seu aparelho. No Gemini gratuito não há busca na web.
 2. Nova música > Buscar na internet (ou Colar cifras) > Gerar.
 
 ## Virar APK
